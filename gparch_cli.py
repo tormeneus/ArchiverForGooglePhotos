@@ -26,17 +26,28 @@ By: Nick Dawson | nick@ndawson.me
 """
 
 import argparse
+import json
+import os
 from os import getcwd
 
 from colorama import Fore, init
 
 from gparch import VERSION, PhotosAccount
 
-if __name__ == "__main__":
+
+def load_config(path):
+    if os.path.isfile(path):
+        with open(path) as f:
+            return json.load(f)
+    return {}
+
+
+def main():
     init()  # Init colorama
 
     CWD = getcwd()
     DEFAULT_THREADS = 8
+    DEFAULT_CONFIG = os.path.expanduser("~/.gparch_config.json")
 
     parser = argparse.ArgumentParser(
         description="If no directory arg is provided the program will default to the current working directory. "
@@ -56,6 +67,13 @@ if __name__ == "__main__":
         "-c",
         "--credentials",
         help="path to Google Cloud OAuth2 Credentials (default: {CURRENT_DIR}/credentials.json)",
+        type=str,
+    )
+    parser.add_argument(
+        "-C",
+        "--config",
+        help="path to configuration file",
+        default=DEFAULT_CONFIG,
         type=str,
     )
     parser.add_argument(
@@ -91,6 +109,14 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    config = load_config(args.config)
+
+    if args.credentials is None:
+        args.credentials = config.get(
+            "credentials", args.directory + "/credentials.json"
+        )
+    if args.threads == DEFAULT_THREADS:
+        args.threads = int(config.get("threads", DEFAULT_THREADS))
 
     # Welcome Message
     print(Fore.BLUE + "================================")
@@ -104,9 +130,6 @@ if __name__ == "__main__":
     )
     print(Fore.RED + "Version -> " + VERSION)
     print(Fore.BLUE + "================================")
-
-    if args.credentials is None:
-        args.credentials = args.directory + "/credentials.json"
 
     # Init PhotosAccount object
     account = PhotosAccount(args.credentials, args.directory, args.threads, args.debug)
@@ -163,3 +186,7 @@ if __name__ == "__main__":
         print("=============")
         print(Fore.BLUE + f"Seconds: {Fore.YELLOW}{seconds:.{2}f}s")
         print(Fore.BLUE + f"Downloads: {Fore.YELLOW}{downloads} items")
+
+
+if __name__ == "__main__":
+    main()

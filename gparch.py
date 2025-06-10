@@ -4,7 +4,7 @@ import os
 import pickle
 import sqlite3
 from multiprocessing.pool import ThreadPool
-from time import time
+from time import time, sleep
 
 import piexif
 import piexif.helper
@@ -13,6 +13,7 @@ from google.auth.transport.requests import Request
 from sanitize_filename import sanitize
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from PIL import Image
 from tqdm import tqdm
 
@@ -50,6 +51,10 @@ SCOPES = [
 
 # Define constants
 DATABASE_NAME = "database.sqlite3"
+# Retry configuration
+MAX_DOWNLOAD_RETRIES = 3
+MAX_API_RETRIES = 5
+RETRY_BACKOFF = 2  # seconds
 
 
 def safe_mkdir(path):
@@ -196,14 +201,33 @@ class PhotosAccount(object):
         else:
             return sqlite3.connect(self.db_path)
 
+    def execute_with_retry(self, request):
+        last_err = None
+        for attempt in range(MAX_API_RETRIES):
+            try:
+                return request.execute()
+            except HttpError as e:
+                if e.resp.status in (429, 500, 503):
+                    wait = RETRY_BACKOFF * (2 ** attempt)
+                    print(f" [WARN] API error {e.resp.status}; retrying in {wait}s")
+                    sleep(wait)
+                    last_err = e
+                else:
+                    raise
+        if last_err:
+            raise last_err
+
     def get_session_stats(self):
         return time() - self.timer, self.downloads
 
     def download_media_item(self, entry):
-        try:
-            uuid, album_uuid, url, path, description = entry
-            if not os.path.isfile(path):
-                r = requests.get(url)
+        uuid, album_uuid, url, path, description = entry
+        if os.path.isfile(path):
+            return False
+
+        for attempt in range(MAX_DOWNLOAD_RETRIES):
+            try:
+                r = requests.get(url, timeout=30)
                 if r.status_code == 200:
                     path = auto_filename(path)
                     if description:
@@ -240,12 +264,27 @@ class PhotosAccount(object):
                         path,
                         album_uuid,
                     )
-
-            else:
-                return False
-        except Exception as e:
-            print(" [ERROR] media item could not be downloaded because:", e)
-            return False
+                elif r.status_code in (429, 500, 503):
+                    wait = RETRY_BACKOFF * (2 ** attempt)
+                    print(
+                        f" [WARN] HTTP {r.status_code} on {uuid}; retrying in {wait}s"
+                    )
+                    sleep(wait)
+                else:
+                    print(
+                        f" [ERROR] failed to download {uuid}: HTTP {r.status_code}"
+                    )
+                    return False
+            except requests.exceptions.RequestException as e:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                print(
+                    f" [WARN] network error on {uuid}: {e}; retrying in {wait}s"
+                )
+                sleep(wait)
+        print(
+            f" [ERROR] media item {uuid} could not be downloaded after {MAX_DOWNLOAD_RETRIES} attempts"
+        )
+        return False
 
     def download(self, entries, desc, thread_count):
         result = ThreadPool(thread_count).imap_unordered(
@@ -370,8 +409,8 @@ class PhotosAccount(object):
             "pageToken": "",
         }
         num = 0
-        request = (
-            self.service.mediaItems().search(body=request_body).execute()
+        request = self.execute_with_retry(
+            self.service.mediaItems().search(body=request_body)
         )  # 100 is max
         if not request:
             return
@@ -380,7 +419,9 @@ class PhotosAccount(object):
                 album_items += request["mediaItems"]
             if "nextPageToken" in request:
                 request_body["pageToken"] = request["nextPageToken"]
-                request = self.service.mediaItems().search(body=request_body).execute()
+                request = self.execute_with_retry(
+                    self.service.mediaItems().search(body=request_body)
+                )
             else:
                 break
 
@@ -420,7 +461,9 @@ class PhotosAccount(object):
     def list_media_items(self):
         num = 0
         media_items_list = []
-        request = self.service.mediaItems().list(pageSize=100).execute()  # Max is 50
+        request = self.execute_with_retry(
+            self.service.mediaItems().list(pageSize=100)
+        )  # Max is 50
         if not request:
             return {}
         while True:
@@ -430,10 +473,8 @@ class PhotosAccount(object):
                 media_items_list += request["mediaItems"]
             if "nextPageToken" in request:
                 next_page = request["nextPageToken"]
-                request = (
-                    self.service.mediaItems()
-                    .list(pageSize=100, pageToken=next_page)
-                    .execute()
+                request = self.execute_with_retry(
+                    self.service.mediaItems().list(pageSize=100, pageToken=next_page)
                 )
             else:
                 break
@@ -445,7 +486,9 @@ class PhotosAccount(object):
     def list_albums(self):
         num = 0
         album_list = []
-        request = self.service.albums().list(pageSize=50).execute()  # Max is 50
+        request = self.execute_with_retry(
+            self.service.albums().list(pageSize=50)
+        )  # Max is 50
         if not request:
             return {}
         while True:
@@ -455,10 +498,8 @@ class PhotosAccount(object):
                 album_list += request["albums"]
             if "nextPageToken" in request:
                 next_page = request["nextPageToken"]
-                request = (
-                    self.service.albums()
-                    .list(pageSize=50, pageToken=next_page)
-                    .execute()
+                request = self.execute_with_retry(
+                    self.service.albums().list(pageSize=50, pageToken=next_page)
                 )
             else:
                 break
@@ -469,7 +510,9 @@ class PhotosAccount(object):
 
     def list_shared_albums(self):
         shared_album_list = []
-        request = self.service.sharedAlbums().list(pageSize=50).execute()  # Max is 50
+        request = self.execute_with_retry(
+            self.service.sharedAlbums().list(pageSize=50)
+        )  # Max is 50
         num = 0
         if not request:
             return {}
@@ -479,10 +522,8 @@ class PhotosAccount(object):
             shared_album_list += request["sharedAlbums"]
             if "nextPageToken" in request:
                 next_page = request["nextPageToken"]
-                request = (
-                    self.service.sharedAlbums()
-                    .list(pageSize=50, pageToken=next_page)
-                    .execute()
+                request = self.execute_with_retry(
+                    self.service.sharedAlbums().list(pageSize=50, pageToken=next_page)
                 )
             else:
                 break
@@ -501,7 +542,9 @@ class PhotosAccount(object):
         num = 0
         # Make request
         favorites_list = []
-        request = self.service.mediaItems().search(body=request_body).execute()
+        request = self.execute_with_retry(
+            self.service.mediaItems().search(body=request_body)
+        )
         if not request:
             return {}
         while True:
@@ -511,7 +554,9 @@ class PhotosAccount(object):
                 favorites_list += request["mediaItems"]
             if "nextPageToken" in request:
                 request_body["pageToken"] = request["nextPageToken"]
-                request = self.service.mediaItems().search(body=request_body).execute()
+                request = self.execute_with_retry(
+                    self.service.mediaItems().search(body=request_body)
+                )
             else:
                 break
             num += 1
