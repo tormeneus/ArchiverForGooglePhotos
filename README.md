@@ -11,6 +11,14 @@ If you need assistance or want to report an issue fill out an [Issue Report](htt
 # [Downloads](https://github.com/NicholasDawson/ArchiverForGooglePhotos/releases)
 > If you are unfamiliar with python or computers in general I recommend you download an executable as it will not require any special installation.
 
+## Python Package
+The archiver can be installed directly from PyPI:
+```bash
+pip install google-photos-archiver
+```
+
+You can then run the program using the `gparch_cli` command.
+
 ## Python Script
 If you are familiar with python, just download the [source code](https://github.com/NicholasDawson/ArchiverForGooglePhotos/releases)
 
@@ -25,7 +33,7 @@ Install dependencies using pipenv
 
 ## Usage:
 ```
-usage: gparch_cli.py [-h] [-c CREDENTIALS] [-t THREADS] [-a] [-s] [-f] [directory]
+usage: gparch_cli.py [-h] [-c CREDENTIALS] [-C CONFIG] [-t THREADS] [-a] [-s] [-f] [directory]
 
 - If no directory arg is provided the program will default to the current working directory.
 - If no credentials are provided the program will search for 'credentials.json' in the directory.
@@ -39,6 +47,8 @@ optional arguments:
   -h, --help            show this help message and exit
   -c CREDENTIALS, --credentials CREDENTIALS
                         path to Google Cloud OAuth2 Credentials (default: {CURRENT_DIR}/credentials.json)
+  -C CONFIG, --config CONFIG
+                        path to configuration file (default: ~/.gparch_config.json)
   -t THREADS, --threads THREADS
                         amount of threads to use when downloading media items (default: 8)
   -d, --debug           enables debugging mode
@@ -83,6 +93,13 @@ Download just your favorited items
 
 Specify the amount of threads you want to download with to be 12:
 `gparch_cli -t 12`
+
+Use a configuration file to store defaults:
+Create `~/.gparch_config.json` with contents like:
+```json
+{"credentials": "/path/to/credentials.json", "threads": 4}
+```
+Then simply run `gparch_cli` with no extra arguments.
 
 You can combine any of the following commands to do what you specifically want.
 - If no directory arg is provided the program will default to the current working directory.
